@@ -70,3 +70,91 @@ while True:
         print(msg)
     if ev.eventType() == blpapi.Event.RESPONSE:
         break
+
+
+
+
+import blpapi
+import pandas as pd
+from blpapi import SessionOptions, Session
+
+# Step 1: Load issuers from Excel
+issuers = pd.read_excel("issuers.xlsx")['Issuer'].dropna().unique()
+
+# Step 2: Setup Bloomberg session
+options = SessionOptions()
+options.setServerHost('localhost')
+options.setServerPort(8194)
+session = Session(options)
+
+if not session.start():
+    raise Exception("Failed to start session")
+if not session.openService("//blp/refdata"):
+    raise Exception("Failed to open //blp/refdata")
+
+service = session.getService("//blp/refdata")
+
+# Store all data
+all_bond_data = []
+
+# Step 3: For each issuer, try to guess correct security query string
+for issuer in issuers:
+    query = f"{issuer} Corp"
+    print(f"🔍 Fetching bonds for: {query}")
+
+    request = service.createRequest("InstrumentListRequest")
+    request.set("query", query)
+    request.set("yellowKeyFilter", "CORP")     # Corporate bonds only
+    request.set("languageOverride", "ENGLISH")
+    request.set("maxResults", 100)
+
+    session.sendRequest(request)
+
+    security_list = []
+    while True:
+        ev = session.nextEvent()
+        for msg in ev:
+            if msg.messageType() == blpapi.Name("InstrumentListResponse"):
+                results = msg.getElement("results")
+                for r in results.values():
+                    ticker = r.getElementAsString("security")
+                    security_list.append(ticker)
+        if ev.eventType() == blpapi.Event.RESPONSE:
+            break
+
+    # Step 4: Pull bond details if any found
+    if security_list:
+        print(f"✅ Found {len(security_list)} securities for {issuer}")
+        ref_request = service.createRequest("ReferenceDataRequest")
+        for sec in security_list:
+            ref_request.append("securities", sec)
+
+        fields = [
+            "ID_BB_GLOBAL", "TICKER", "NAME", "CPN", "MATURITY", "YLD_YTM_MID", 
+            "PX_LAST", "CRNCY", "ISSUE_DT", "AMT_ISSUED", "RTG_SP", "RTG_MDY", "RTG_FITCH", "ISSUER"
+        ]
+        for f in fields:
+            ref_request.append("fields", f)
+
+        session.sendRequest(ref_request)
+
+        while True:
+            ev = session.nextEvent()
+            for msg in ev:
+                if msg.messageType() == blpapi.Name("ReferenceDataResponse"):
+                    for securityData in msg.getElement("securityData").values():
+                        sec = securityData.getElementAsString("security")
+                        fldData = securityData.getElement("fieldData")
+                        row = {"Security": sec}
+                        for f in fields:
+                            row[f] = fldData.getElementAsString(f) if fldData.hasElement(f) else None
+                        all_bond_data.append(row)
+            if ev.eventType() == blpapi.Event.RESPONSE:
+                break
+    else:
+        print(f"⚠️ No bonds found for {issuer}")
+
+# Step 5: Export results
+df = pd.DataFrame(all_bond_data)
+df.to_excel("issuer_bond_details.xlsx", index=False)
+print("✅ Saved all results to issuer_bond_details.xlsx")
