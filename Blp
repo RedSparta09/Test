@@ -1,0 +1,72 @@
+import blpapi
+from blpapi import SessionOptions, Session
+import datetime
+
+# Set up session
+options = SessionOptions()
+options.setServerHost('localhost')
+options.setServerPort(8194)
+session = Session(options)
+
+if not session.start():
+    raise Exception("Failed to start session.")
+
+if not session.openService("//blp/instruments"):
+    raise Exception("Failed to open //blp/instruments")
+
+service = session.getService("//blp/instruments")
+request = service.createRequest("instrumentListRequest")
+
+# Use your saved SRCH screen name here
+request.set("query", "US_IG_2025_Issuance")
+request.set("maxResults", 1000)
+
+session.sendRequest(request)
+
+# Get list of securities
+security_list = []
+while True:
+    ev = session.nextEvent()
+    for msg in ev:
+        if msg.messageType() == "instrumentListResponse":
+            for result in msg.getElement("results").values():
+                ticker = result.getElementAsString("description")
+                security_list.append(ticker)
+    if ev.eventType() == blpapi.Event.RESPONSE:
+        break
+
+print(f"Found {len(security_list)} securities")
+
+
+
+
+
+
+if not session.openService("//blp/refdata"):
+    raise Exception("Failed to open //blp/refdata")
+
+refDataSvc = session.getService("//blp/refdata")
+request = refDataSvc.createRequest("ReferenceDataRequest")
+
+# Set securities
+request.append("securities", "US12345ABCD7 Corp")  # Example
+
+# Fields we want
+request.append("fields", "ID_ISIN")
+request.append("fields", "TICKER")
+request.append("fields", "CPN")
+request.append("fields", "MATURITY")
+request.append("fields", "ISSUER")
+request.append("fields", "CRNCY")
+request.append("fields", "ISSUE_DT")
+
+# Send request
+session.sendRequest(request)
+
+# Parse the results
+while True:
+    ev = session.nextEvent()
+    for msg in ev:
+        print(msg)
+    if ev.eventType() == blpapi.Event.RESPONSE:
+        break
